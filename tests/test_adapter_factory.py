@@ -1,10 +1,8 @@
 """Tests for the disassembler adapter factory."""
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
-from marco.disassemblers import BACKENDS, InstructionToken, create_adapter, _detect_backend
+from marco.disassemblers import BACKENDS, InstructionToken, create_adapter
 
 
 class TestInstructionToken:
@@ -33,46 +31,6 @@ class TestCreateAdapter:
     def test_create_invalid_raises(self):
         with pytest.raises(ValueError, match="Unknown backend"):
             create_adapter("invalid")
-
-
-class TestDetectBackend:
-    def test_detect_binja_first(self):
-        with patch("builtins.__import__", side_effect=lambda name, *a, **kw: (
-            MagicMock() if name == "binaryninja" else __import__(name, *a, **kw)
-        )):
-            assert _detect_backend() == "binja"
-
-    def test_detect_ida_when_no_binja(self):
-        def fake_import(name, *args, **kwargs):
-            if name == "binaryninja":
-                raise ImportError("no binja")
-            if name == "ida_domain":
-                return MagicMock()
-            return __import__(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=fake_import):
-            assert _detect_backend() == "ida"
-
-    def test_detect_ghidra_when_no_others(self):
-        def fake_import(name, *args, **kwargs):
-            if name in ("binaryninja", "ida_domain"):
-                raise ImportError("not available")
-            if name == "pyghidra":
-                return MagicMock()
-            return __import__(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=fake_import):
-            assert _detect_backend() == "ghidra"
-
-    def test_no_backend_raises(self):
-        def fake_import(name, *args, **kwargs):
-            if name in ("binaryninja", "ida_domain", "pyghidra"):
-                raise ImportError("not available")
-            return __import__(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=fake_import):
-            with pytest.raises(RuntimeError, match="No disassembler backend found"):
-                _detect_backend()
 
 
 class TestBackendsList:

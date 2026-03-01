@@ -28,9 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-l", "--log-level", default="INFO", help="Log level (DEBUG, INFO, WARNING, ERROR)")
     parser.add_argument(
         "--backend",
-        choices=["auto", "binja", "ida", "ghidra"],
-        default="auto",
-        help="Disassembler backend (default: auto-detect)",
+        choices=["binja", "ida", "ghidra"],
+        default="binja",
+        help="Disassembler backend (default: binja)",
     )
 
     return parser

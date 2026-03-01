@@ -104,7 +104,7 @@ def _ida_worker_main(payload: dict[str, Any], event_queue: mp.Queue) -> None:
 
         config = Config.discover(payload.get("config_path"))
         backend = payload.get("backend", "binja")
-        if config and backend and backend != "auto":
+        if config and backend:
             config._values["DISASSEMBLER_BACKEND"] = backend
 
         observer = _QueueObserver(event_queue)
@@ -323,9 +323,6 @@ async def start_analysis(request: AnalyzeRequest) -> dict:
     observer = WebSocketObserver(_manager, _state, loop)
 
     resolved_backend = request.backend or "binja"
-    if resolved_backend == "auto":
-        cfg = _resolve_config()
-        resolved_backend = cfg.backend if cfg else "binja"
 
     use_processes = bool(request.use_processes and resolved_backend == "binja")
 
@@ -336,7 +333,7 @@ async def start_analysis(request: AnalyzeRequest) -> dict:
             config = _resolve_config()
 
             # Override backend from web UI selection
-            if request.backend and request.backend != "auto":
+            if request.backend:
                 config._values["DISASSEMBLER_BACKEND"] = request.backend
 
             binaries = request.only if request.only else (request.seed or [])

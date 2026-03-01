@@ -45,25 +45,13 @@ class DisassemblerAdapter(Protocol):
 BACKENDS = ["binja", "ida", "ghidra"]
 
 
-def _detect_backend() -> str:
-    for name, mod in [("binja", "binaryninja"), ("ida", "ida_domain"), ("ghidra", "pyghidra")]:
-        try:
-            __import__(mod)
-            return name
-        except ImportError:
-            continue
-    raise RuntimeError("No disassembler backend found. Install binaryninja, ida_domain, or pyghidra.")
-
-
-def create_adapter(backend: str = "auto", **kwargs: Any) -> DisassemblerAdapter:
+def create_adapter(backend: str = "binja", **kwargs: Any) -> DisassemblerAdapter:
     """Create a disassembler adapter for the specified backend.
 
     Args:
-        backend: One of ``"auto"``, ``"binja"``, ``"ida"``, ``"ghidra"``.
+        backend: One of ``"binja"``, ``"ida"``, ``"ghidra"``.
         **kwargs: Backend-specific constructor arguments.
     """
-    if backend == "auto":
-        backend = _detect_backend()
     if backend == "binja":
         from .binaryninja_adapter import BinaryNinjaAdapter
 

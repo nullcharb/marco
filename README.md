@@ -40,8 +40,8 @@ NEO4J_URI=neo4j://127.0.0.1:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your_password_here
 ANTHROPIC_API_KEY=your_api_key_here (optional, for cluster labeling)
-# Backend selection: auto | binja | ida | ghidra
-DISASSEMBLER_BACKEND=auto
+# Backend selection: binja | ida | ghidra
+DISASSEMBLER_BACKEND=binja
 # Required for IDA backend
 IDADIR=C:\Program Files\IDA Professional 9.2
 # Required for Ghidra backend
@@ -104,7 +104,6 @@ The browser interface has three views:
 - **Binary Ninja (`binja`)**: supports thread mode and process mode.
 - **IDA (`ida`)**: analysis runs in a dedicated spawned process; execution is sequential to satisfy IDA thread-affinity constraints.
 - **Ghidra (`ghidra`)**: analysis runs in thread mode; process mode is automatically disabled because JVM state cannot be safely forked.
-- **Auto (`auto`)**: selects the first importable backend in this order: `binaryninja`, `ida_domain`, `pyghidra`.
 
 Backend-specific output artifacts:
 - **IDA**: `.i64` databases are written under `output/ida_databases/`.

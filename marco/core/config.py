@@ -89,8 +89,8 @@ class Config:
 
     @property
     def backend(self) -> str:
-        """Return the configured disassembler backend (default: auto)."""
-        return self.get_with_env_fallback("DISASSEMBLER_BACKEND", "auto") or "auto"
+        """Return the configured disassembler backend (default: binja)."""
+        return self.get_with_env_fallback("DISASSEMBLER_BACKEND", "binja") or "binja"
 
     def __repr__(self) -> str:
         return f"Config({len(self._values)} values)"

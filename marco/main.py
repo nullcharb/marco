@@ -96,7 +96,7 @@ def analyze_command(
     from .extractors.secure_call import SecureCallsExtractor
     from .extractors.syscall import SyscallsExtractor
 
-    backend = config.backend if config else "auto"
+    backend = config.backend if config else "binja"
 
     _bn_mfs = os.getenv("BN_MAX_FUNCTION_SIZE")
     bn_max_function_size = int(_bn_mfs) if _bn_mfs else None
@@ -107,9 +107,6 @@ def analyze_command(
     # Build adapter kwargs based on detected/selected backend
     adapter_kwargs: dict[str, object] = {}
     resolved_backend = backend
-    if resolved_backend == "auto":
-        from .disassemblers import _detect_backend
-        resolved_backend = _detect_backend()
     logging.debug("Resolved disassembler backend: %s", resolved_backend)
 
     # Propagate backend-specific config values into env vars so that

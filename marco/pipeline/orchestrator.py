@@ -39,7 +39,7 @@ class AnalysisOrchestrator:
         depth: int | None = None,
         no_kernel: bool = False,
         use_processes: bool = False,
-        backend: str = "auto",
+        backend: str = "binja",
         adapter_opts: dict[str, Any] | None = None,
     ):
         self.binaries = binaries
