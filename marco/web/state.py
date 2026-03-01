@@ -178,6 +178,24 @@ class AnalysisState:
                 self.current_phase = None
                 self.phase_progress = None
 
+    def is_effectively_running(self) -> bool:
+        """Return whether analysis is effectively running.
+
+        This guards against stale `running=True` when no binaries are queued/
+        analyzing and no phase is active.
+        """
+        with self._lock:
+            if not self.running:
+                return False
+
+            has_active_binary = any(
+                e.status in (BinaryStatus.QUEUED, BinaryStatus.ANALYZING)
+                for e in self.binaries.values()
+            )
+            if not has_active_binary and self.current_phase is None:
+                return False
+            return True
+
     def get_snapshot(self) -> dict:
         with self._lock:
             completed = [e for e in self.binaries.values() if e.status == BinaryStatus.COMPLETED]

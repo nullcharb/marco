@@ -5,6 +5,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+from marco.web import routes as routes_module
 from marco.web.server import create_app
 
 
@@ -72,6 +73,17 @@ class TestRunManifest:
 
 class TestAnalyzeEndpoint:
     def test_analyze_no_seed(self, client):
+        resp = client.post("/api/analyze", json={})
+        assert resp.status_code == 200
+        assert resp.json()["error"] == "either seed or only list must be provided"
+
+    def test_analyze_ignores_stale_running_flag(self, client):
+        # Simulate stale in-memory state where running=True but no active work.
+        assert routes_module._state is not None
+        routes_module._state.reset()
+        routes_module._state.running = True
+        routes_module._state.current_phase = None
+
         resp = client.post("/api/analyze", json={})
         assert resp.status_code == 200
         assert resp.json()["error"] == "either seed or only list must be provided"

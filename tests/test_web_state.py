@@ -91,3 +91,14 @@ class TestAnalysisState:
         assert snap["aggregates"]["total_edges"] == 130
         assert snap["aggregates"]["total_syscalls"] == 10
         assert snap["aggregates"]["completed"] == 2
+
+    def test_is_effectively_running_false_for_stale_flag(self):
+        state = AnalysisState()
+        state.running = True
+        state.current_phase = None
+        assert state.is_effectively_running() is False
+
+    def test_is_effectively_running_true_with_active_queue(self):
+        state = AnalysisState()
+        state.binary_queued("kernel32.dll", 0)
+        assert state.is_effectively_running() is True

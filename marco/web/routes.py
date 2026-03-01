@@ -308,7 +308,7 @@ async def start_analysis(request: AnalyzeRequest) -> dict:
     if _state is None or _manager is None:
         return {"error": "server not initialized"}
 
-    if _state.running:
+    if _state.is_effectively_running():
         return {"error": "analysis already running"}
 
     if not request.seed and not request.only:
