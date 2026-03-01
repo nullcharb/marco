@@ -9,42 +9,14 @@ import threading
 from contextlib import contextmanager, suppress
 from ctypes import wintypes
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from binaryninja import BinaryView, Settings, Symbol, SymbolType, load
 
+from ..utils.module_resolution import resolve_module_name as _resolve_module_name
+from ..utils.module_resolution import symbol_module_from_filename as _symbol_module_from_filename
 from . import DisassemblerAdapter
 
-if TYPE_CHECKING:
-    from pyjectify import ApiSetSchema
-
 logger = logging.getLogger(__name__)
-
-_apiset_schema: ApiSetSchema | None = None
-
-
-def _resolve_module_name(module_name: str) -> str:
-    """
-    Return a normalized filename for a module (ensures extension). This is for queueing and resolution.
-    """
-    global _apiset_schema
-    name = module_name.lower()
-    if name.startswith("api-ms-win") or name.startswith("ext-ms-win"):
-        # Lazy import to avoid dependency at import time
-        try:
-            from pyjectify import ApiSetSchema
-
-            query = name if name.endswith(".dll") else f"{name}.dll"
-            if _apiset_schema is None:
-                _apiset_schema = ApiSetSchema()
-            resolved = _apiset_schema.resolve(query)
-            if resolved:
-                name = resolved
-        except Exception:
-            pass
-    if not name.endswith((".dll", ".sys", ".exe")):
-        name += ".dll"
-    return name
 
 
 def _cache_key(filepath: str) -> str:
@@ -70,13 +42,6 @@ def configure_pdb_settings(symbol_store: str) -> None:
     s.set_string("pdb.files.localStoreAbsolute", abs_store)
 
 
-def _symbol_module_from_filename(filename: str) -> str:
-    base = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    if "." in base:
-        base = base.split(".")[0]
-    return base.lower()
-
-
 # Global lock serializing all Binary Ninja load/analysis operations.
 # BN's analysis engine is not documented as thread-safe for concurrent
 # multi-binary analysis and can cause access violations on Windows when
@@ -86,6 +51,8 @@ _BN_LOCK = threading.Lock()
 
 
 class BinaryNinjaAdapter(DisassemblerAdapter):
+    source_name = "binaryninja"
+
     def __init__(
         self,
         *,

@@ -88,35 +88,68 @@ def analyze_command(
     if effective_symbol_store:
         Path(effective_symbol_store).mkdir(parents=True, exist_ok=True)
 
-    # Initialize Binary Ninja adapter (tuning parameters from environment variables only)
-    from .core.binja_discovery import ensure_binaryninja_importable
+    # Initialize disassembler adapter via factory
+    from .disassemblers import create_adapter
+    from .extractors.calls import CallsExtractor
+    from .extractors.rpc_client import RPCClientExtractor
+    from .extractors.rpc_server import RPCServerExtractor
+    from .extractors.secure_call import SecureCallsExtractor
+    from .extractors.syscall import SyscallsExtractor
 
-    ensure_binaryninja_importable()
+    backend = config.backend if config else "auto"
+
+    _bn_mfs = os.getenv("BN_MAX_FUNCTION_SIZE")
+    bn_max_function_size = int(_bn_mfs) if _bn_mfs else None
+    _bn_mfuc = os.getenv("BN_MAX_FUNCTION_UPDATE_COUNT")
+    bn_max_function_update_count = int(_bn_mfuc) if _bn_mfuc else None
+    bn_linear_sweep_permissive = os.getenv("BN_LINEAR_SWEEP_PERMISSIVE", "").lower() in ("1", "true", "yes")
+
+    # Build adapter kwargs based on detected/selected backend
+    adapter_kwargs: dict[str, object] = {}
+    resolved_backend = backend
+    if resolved_backend == "auto":
+        from .disassemblers import _detect_backend
+        resolved_backend = _detect_backend()
+    logging.debug("Resolved disassembler backend: %s", resolved_backend)
+
+    # Propagate backend-specific config values into env vars so that
+    # underlying libraries (pyghidra, ida_domain) can discover them.
+    _env_keys_for_backend: dict[str, list[str]] = {
+        "ghidra": ["GHIDRA_INSTALL_DIR"],
+        "ida": ["IDADIR"],
+    }
+    if config:
+        for key in _env_keys_for_backend.get(resolved_backend, []):
+            val = config.get(key)
+            if val and key not in os.environ:
+                os.environ[key] = val
+
+    if resolved_backend == "binja":
+        from .core.binja_discovery import ensure_binaryninja_importable
+        ensure_binaryninja_importable()
+        adapter_kwargs = {
+            "linear_sweep_permissive": bn_linear_sweep_permissive,
+            "max_function_size": bn_max_function_size,
+            "max_function_update_count": bn_max_function_update_count,
+            "cache_dir": effective_cache_dir,
+            "symbol_store": effective_symbol_store,
+        }
+    elif resolved_backend == "ghidra":
+        ghidra_project_dir = os.path.join(output_dir, "ghidra_projects")
+        Path(ghidra_project_dir).mkdir(parents=True, exist_ok=True)
+        adapter_kwargs = {"project_dir": ghidra_project_dir}
+    elif resolved_backend == "ida":
+        ida_db_dir = os.path.join(output_dir, "ida_databases")
+        Path(ida_db_dir).mkdir(parents=True, exist_ok=True)
+        adapter_kwargs = {"output_dir": ida_db_dir}
+    logging.debug("Adapter kwargs: %s", adapter_kwargs)
+
     try:
-        from .disassemblers.binaryninja_adapter import BinaryNinjaAdapter
-        from .extractors.calls import CallsExtractor
-        from .extractors.rpc_client import RPCClientExtractor
-        from .extractors.rpc_server import RPCServerExtractor
-        from .extractors.secure_call import SecureCallsExtractor
-        from .extractors.syscall import SyscallsExtractor
-
-        _bn_mfs = os.getenv("BN_MAX_FUNCTION_SIZE")
-        bn_max_function_size = int(_bn_mfs) if _bn_mfs else None
-        _bn_mfuc = os.getenv("BN_MAX_FUNCTION_UPDATE_COUNT")
-        bn_max_function_update_count = int(_bn_mfuc) if _bn_mfuc else None
-        bn_linear_sweep_permissive = os.getenv("BN_LINEAR_SWEEP_PERMISSIVE", "").lower() in ("1", "true", "yes")
-
-        adapter = BinaryNinjaAdapter(
-            linear_sweep_permissive=bn_linear_sweep_permissive,
-            max_function_size=bn_max_function_size,
-            max_function_update_count=bn_max_function_update_count,
-            cache_dir=effective_cache_dir,
-            symbol_store=effective_symbol_store,
-        )
-    except ModuleNotFoundError as e:
+        adapter = create_adapter(resolved_backend, **adapter_kwargs)
+    except (ImportError, RuntimeError) as e:
         raise SystemExit(
-            "Binary Ninja Python API is not installed.\n"
-            "Run <binja>/scripts/install_api.py, or set BINJA_PATH to your Binary Ninja python/ directory."
+            f"Failed to initialize disassembler backend '{backend}': {e}\n"
+            "Install the required backend or set --backend / DISASSEMBLER_BACKEND."
         ) from e
 
     extractors = [
@@ -196,11 +229,8 @@ def analyze_command(
         depth=depth,
         no_kernel=no_kernel,
         use_processes=use_processes,
-        bn_linear_sweep_permissive=bn_linear_sweep_permissive,
-        bn_max_function_size=bn_max_function_size,
-        bn_max_function_update_count=bn_max_function_update_count,
-        cache_dir=effective_cache_dir,
-        symbol_store=effective_symbol_store,
+        backend=resolved_backend,
+        adapter_opts=dict(adapter_kwargs),
     )
 
     if observer is not None:
@@ -276,7 +306,7 @@ def _run_prewalk(
         logging.debug("pefile not available; skipping pre-walk seeding")
         return
 
-    from .disassemblers.binaryninja_adapter import _resolve_module_name
+    from .utils.module_resolution import resolve_module_name as _resolve_module_name
 
     def _imports_for(path: str) -> list[str]:
         try:
@@ -365,6 +395,9 @@ def main():
         level=getattr(logging, args.log_level.upper(), logging.INFO),
         format="[%(asctime)s][%(levelname)s] %(message)s",
     )
+    # Do not pre-import idapro here. The IDA backend is initialized on a
+    # dedicated analysis worker thread so thread affinity remains consistent
+    # across all IDA operations while the event loop stays responsive.
 
     from .web.server import run_server
 

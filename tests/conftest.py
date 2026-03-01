@@ -8,6 +8,12 @@ from marco.core.rpc_models import RPCClientCall, RPCInterface, RPCProcedure
 from marco.core.rpc_registry import RPCRegistry
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "binja: requires Binary Ninja")
+    config.addinivalue_line("markers", "ida: requires IDA Pro")
+    config.addinivalue_line("markers", "ghidra: requires Ghidra")
+
+
 @pytest.fixture
 def rpc_procedure_factory():
     """Factory for creating RPCProcedure instances."""

@@ -80,29 +80,20 @@ def _serialize_rpc_data(rpc_registry: RPCRegistry) -> dict:
 def process_binary_subprocess(
     target: str,
     search_paths: list[str],
-    bn_linear_sweep_permissive: bool,
-    bn_max_function_size: int | None,
-    bn_max_function_update_count: int | None,
-    cache_dir: str | None = None,
-    symbol_store: str | None = None,
+    backend: str = "binja",
+    adapter_opts: dict | None = None,
 ) -> tuple[list[Node], list[Edge], set[str], dict]:
     """Entry point for ProcessPoolExecutor workers. Constructs adapter/extractors locally to avoid pickling BN objects."""
     # Lazy imports inside subprocess to avoid pickling issues
     from ..core.rpc_registry import RPCRegistry
-    from ..disassemblers.binaryninja_adapter import BinaryNinjaAdapter
+    from ..disassemblers import create_adapter
     from ..extractors.calls import CallsExtractor
     from ..extractors.rpc_client import RPCClientExtractor
     from ..extractors.rpc_server import RPCServerExtractor
     from ..extractors.secure_call import SecureCallsExtractor
     from ..extractors.syscall import SyscallsExtractor
 
-    adapter = BinaryNinjaAdapter(
-        linear_sweep_permissive=bn_linear_sweep_permissive,
-        max_function_size=bn_max_function_size,
-        max_function_update_count=bn_max_function_update_count,
-        cache_dir=cache_dir,
-        symbol_store=symbol_store,
-    )
+    adapter = create_adapter(backend, **(adapter_opts or {}))
 
     extractors = [
         CallsExtractor(),

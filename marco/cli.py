@@ -26,5 +26,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output", default="output", help="Output directory for analysis runs (default: output)")
     parser.add_argument("--config", default=None, help="Path to configuration file")
     parser.add_argument("-l", "--log-level", default="INFO", help="Log level (DEBUG, INFO, WARNING, ERROR)")
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "binja", "ida", "ghidra"],
+        default="auto",
+        help="Disassembler backend (default: auto-detect)",
+    )
 
     return parser

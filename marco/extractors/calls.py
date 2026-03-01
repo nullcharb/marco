@@ -27,7 +27,7 @@ class CallsExtractor:
             symbol = f"{module}!{fn_name}"
 
             props = {
-                "source": "binaryninja",
+                "source": adapter.source_name,
                 "placeholder": False,
                 **({"file_version": file_version} if file_version else {}),
             }

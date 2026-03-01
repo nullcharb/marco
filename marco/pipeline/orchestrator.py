@@ -39,11 +39,8 @@ class AnalysisOrchestrator:
         depth: int | None = None,
         no_kernel: bool = False,
         use_processes: bool = False,
-        bn_linear_sweep_permissive: bool = False,
-        bn_max_function_size: int | None = None,
-        bn_max_function_update_count: int | None = None,
-        cache_dir: str | None = None,
-        symbol_store: str | None = None,
+        backend: str = "auto",
+        adapter_opts: dict[str, Any] | None = None,
     ):
         self.binaries = binaries
         self.search_paths = search_paths
@@ -56,11 +53,8 @@ class AnalysisOrchestrator:
         self.depth = depth
         self.no_kernel = no_kernel
         self.use_processes = use_processes
-        self.bn_linear_sweep_permissive = bn_linear_sweep_permissive
-        self.bn_max_function_size = bn_max_function_size
-        self.bn_max_function_update_count = bn_max_function_update_count
-        self.cache_dir = cache_dir
-        self.symbol_store = symbol_store
+        self.backend = backend
+        self.adapter_opts = adapter_opts or {}
 
         self.work_q: queue.Queue[tuple[str, int]] = queue.Queue(maxsize=WORK_QUEUE_MAXSIZE)
         self.seen: set[str] = set()
@@ -112,6 +106,31 @@ class AnalysisOrchestrator:
         manifest: Manifest,
     ) -> None:
         analysis_start = time.perf_counter()
+
+        # IDA requires all calls on the main thread — run sequentially, no executor.
+        if self.backend == "ida":
+            if self.use_processes or self.max_workers > 1:
+                logger.warning(
+                    "Backend 'ida' requires main-thread execution. "
+                    "Running sequentially on the main thread.",
+                )
+                self.use_processes = False
+                self.max_workers = 1
+            self._run_sequential(writer, manifest)
+            total_elapsed = time.perf_counter() - analysis_start
+            logger.info(f"Analysis complete in {total_elapsed:.2f}s")
+            if self.observer:
+                self.observer.on_analysis_complete(total_elapsed, self._total_nodes, self._total_edges)
+            return
+
+        # Ghidra (pyghidra/JPype) JVM cannot survive fork() — disable process mode.
+        if self.backend == "ghidra" and self.use_processes:
+            logger.warning(
+                "Backend 'ghidra' does not support multiprocessing (JVM cannot fork). "
+                "Falling back to thread mode.",
+            )
+            self.use_processes = False
+
         futures: set[concurrent.futures.Future] = set()
 
         if not self.use_processes and self.max_workers > 1:
@@ -161,6 +180,144 @@ class AnalysisOrchestrator:
             if self.observer:
                 self.observer.on_analysis_complete(total_elapsed, self._total_nodes, self._total_edges)
 
+    def _run_sequential(
+        self,
+        writer: JsonlWriter,
+        manifest: Manifest,
+    ) -> None:
+        """Run analysis on the current (main) thread — required for IDA."""
+        from ..utils.module_resolution import resolve_module_name as _resolve_module_name
+
+        try:
+            while not self.work_q.empty():
+                if self.interrupted:
+                    break
+
+                try:
+                    target, current_depth = self.work_q.get_nowait()
+                except queue.Empty:
+                    break
+
+                resolved_target = _resolve_module_name(target)
+
+                # SHA / manifest skip check
+                try:
+                    candidate_path = resolve_file_path(resolved_target, self.search_paths)
+                    sha = compute_sha256(candidate_path)
+                    if manifest.has_sha(sha):
+                        logger.info("Skipping %s (already processed)", target)
+                        if self.observer:
+                            self.observer.on_binary_error(target, current_depth, "already processed")
+                        continue
+                except FileNotFoundError:
+                    logger.info("Skipping %s (not found)", target)
+                    if self.observer:
+                        self.observer.on_binary_error(target, current_depth, "not found")
+                    continue
+                except Exception:
+                    logger.debug("SHA check failed for %s, proceeding", target, exc_info=True)
+
+                logger.info("Analyzing %s (depth=%d)...", target, current_depth)
+                if self.observer:
+                    self.observer.on_binary_started(target, current_depth)
+
+                start = time.perf_counter()
+                try:
+                    nodes, edges, discovered = process_binary(
+                        resolved_target,
+                        self.search_paths,
+                        self.adapter,
+                        self.extractors,
+                        self.rpc_registry,
+                    )
+                except FileNotFoundError as exc:
+                    logger.warning("Skipping %s: %s", target, exc)
+                    if self.observer:
+                        self.observer.on_binary_error(target, current_depth, str(exc))
+                    continue
+                except Exception as exc:
+                    logger.exception("Error analyzing %s: %s", target, exc)
+                    if self.observer:
+                        self.observer.on_binary_error(target, current_depth, str(exc))
+                    continue
+
+                elapsed = time.perf_counter() - start
+                logger.info(
+                    "Finished %s in %.2fs (nodes=%d, edges=%d, imports=%d)",
+                    target, elapsed, len(nodes), len(edges), len(discovered),
+                )
+
+                if self.observer:
+                    edge_kind_counts: dict[str, int] = {}
+                    xmod_edge_count = 0
+                    for e in edges:
+                        edge_kind_counts[e.kind] = edge_kind_counts.get(e.kind, 0) + 1
+                        src_mod = e.src.split("!", 1)[0] if "!" in e.src else ""
+                        dst_mod = e.dst.split("!", 1)[0] if "!" in e.dst else ""
+                        if src_mod != dst_mod:
+                            xmod_edge_count += 1
+                    self.observer.on_binary_completed(
+                        name=target,
+                        depth=current_depth,
+                        node_count=len(nodes),
+                        edge_count=len(edges),
+                        import_count=len(discovered),
+                        elapsed_s=elapsed,
+                        discovered=list(discovered),
+                        edge_kind_counts=edge_kind_counts,
+                        xmod_edge_count=xmod_edge_count,
+                    )
+
+                with self._lock:
+                    self._total_nodes += len(nodes)
+                    self._total_edges += len(edges)
+
+                for n in nodes:
+                    writer.write_node(n)
+                for e in edges:
+                    writer.write_edge(e)
+
+                # Update manifest
+                try:
+                    resolved_path = resolve_file_path(target, self.search_paths)
+                    sha = compute_sha256(resolved_path)
+                    file_version = self._extract_file_version(nodes)
+                    entry = ManifestEntry(
+                        module=target.lower(),
+                        path=resolved_path,
+                        sha256=sha,
+                        file_version=file_version,
+                    )
+                    manifest.add(entry)
+                    manifest.save()
+                    self.dependency_tracker.add_module(target.lower())
+                except Exception:
+                    logger.warning("Failed to update manifest for %s", target, exc_info=True)
+
+                self.dependency_tracker.add_dependencies(target.lower(), discovered)
+
+                # Auto-follow and discovered modules
+                target_base = target.lower().rsplit(".", 1)[0] if "." in target.lower() else target.lower()
+                auto_follow = []
+                if target_base == "ntdll" and not self.no_kernel:
+                    auto_follow.append("ntoskrnl.exe")
+                if target_base == "ntoskrnl":
+                    auto_follow.append("securekernel.exe")
+                for extra in auto_follow:
+                    if self._try_enqueue(extra, current_depth + 1):
+                        logger.info("Auto-added %s from %s", extra, target_base)
+
+                if not self.single_binary and (self.depth is None or current_depth < self.depth):
+                    next_depth = current_depth + 1
+                    for mod in discovered:
+                        if self.no_kernel and self._is_kernel_module(mod.lower()):
+                            continue
+                        self._try_enqueue(mod, next_depth)
+
+        except KeyboardInterrupt:
+            self.interrupted = True
+            logger.warning("Interrupted by user (Ctrl+C). Cancelling remaining analysis...")
+
     def _submit_initial_work(
         self,
         executor: concurrent.futures.Executor,
@@ -182,7 +339,7 @@ class AnalysisOrchestrator:
         target: str,
         current_depth: int,
     ) -> concurrent.futures.Future | None:
-        from ..disassemblers.binaryninja_adapter import _resolve_module_name
+        from ..utils.module_resolution import resolve_module_name as _resolve_module_name
 
         resolved_target = _resolve_module_name(target)
 
@@ -211,11 +368,8 @@ class AnalysisOrchestrator:
                 process_binary_subprocess,
                 resolved_target,
                 self.search_paths,
-                self.bn_linear_sweep_permissive,
-                self.bn_max_function_size,
-                self.bn_max_function_update_count,
-                self.cache_dir,
-                self.symbol_store,
+                self.backend,
+                self.adapter_opts,
             )
         else:
             fut = executor.submit(

@@ -3,7 +3,7 @@
 
 def test_apiset_resolution():
     """Test that api-ms-win-core-libraryloader-l1-2-0.dll resolves to kernelbase.dll"""
-    from marco.disassemblers.binaryninja_adapter import _resolve_module_name
+    from marco.utils.module_resolution import resolve_module_name as _resolve_module_name
 
     # Test the specific case mentioned
     result = _resolve_module_name("api-ms-win-core-libraryloader-l1-2-0.dll")
@@ -16,7 +16,7 @@ def test_apiset_resolution():
 
 def test_apiset_resolution_various():
     """Test various APISet resolutions"""
-    from marco.disassemblers.binaryninja_adapter import _resolve_module_name
+    from marco.utils.module_resolution import resolve_module_name as _resolve_module_name
 
     # Validates with NtObjectManager
     test_cases = [
@@ -37,7 +37,7 @@ def test_apiset_resolution_various():
 
 def test_normal_dll_unchanged():
     """Test that normal DLLs pass through unchanged"""
-    from marco.disassemblers.binaryninja_adapter import _resolve_module_name
+    from marco.utils.module_resolution import resolve_module_name as _resolve_module_name
 
     test_cases = [
         "kernel32.dll",
