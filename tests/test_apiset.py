@@ -30,9 +30,6 @@ def test_apiset_resolution_various():
         result = _resolve_module_name(apiset)
         # We expect it to resolve to something, at minimum
         assert result.endswith(".dll"), f"Expected .dll extension for {apiset}, got {result}"
-        # If pyjectify is working, it should resolve correctly
-        if result != f"{apiset}.dll":
-            print(f"✓ {apiset} -> {result}")
 
 
 def test_normal_dll_unchanged():
