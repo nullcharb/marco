@@ -330,8 +330,36 @@ td.binary-name {
     border-radius: 2px;
 }
 
+.analysis-form select {
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Consolas", monospace;
+    font-size: 0.9rem;
+    padding: 0.35rem 1.7rem 0.35rem 0.5rem;
+    border: 1px solid #dad9d4;
+    background: #fbfbf9;
+    color: #181612;
+    width: 100%;
+    min-width: 140px;
+    border-radius: 2px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, #6f6e67 50%),
+        linear-gradient(135deg, #6f6e67 50%, transparent 50%);
+    background-position:
+        calc(100% - 14px) calc(50% - 3px),
+        calc(100% - 9px) calc(50% - 3px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+}
+
+.analysis-form select option {
+    font-family: "JetBrains Mono", "Fira Code", "SF Mono", "Consolas", monospace;
+}
+
 .analysis-form input[type="text"]:focus,
-.analysis-form input[type="number"]:focus {
+.analysis-form input[type="number"]:focus,
+.analysis-form select:focus {
     outline: none;
     border-color: #78776e;
 }

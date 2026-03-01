@@ -8,6 +8,18 @@ var Analysis = (function () {
 
     function init() {
         document.getElementById("analysis-form").addEventListener("submit", onSubmit);
+        var backendInput = document.getElementById("backend-input");
+        if (backendInput) {
+            backendInput.addEventListener("change", syncProcessToggleForBackend);
+        }
+        syncProcessToggleForBackend();
+    }
+
+    function syncProcessToggleForBackend() {
+        var backendInput = document.getElementById("backend-input");
+        var useProcessesInput = document.getElementById("use-processes-input");
+        if (!backendInput || !useProcessesInput) return;
+        useProcessesInput.checked = backendInput.value === "binja";
     }
 
     function onSubmit(e) {
@@ -28,6 +40,7 @@ var Analysis = (function () {
             prewalk: document.getElementById("prewalk-input").checked,
             use_processes: document.getElementById("use-processes-input").checked,
             load_neo4j: document.getElementById("load-neo4j-input").checked,
+            backend: document.getElementById("backend-input").value,
         };
         if (workers) body.workers = parseInt(workers, 10);
         if (depth) body.depth = parseInt(depth, 10);

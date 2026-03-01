@@ -63,6 +63,7 @@ class AnalysisState:
         self._total_nodes: int = 0
         self._total_edges: int = 0
         self.running: bool = False
+        self.backend: str = "binja"
         self.current_phase: str | None = None
         self.phase_progress: tuple[int, int] | None = None  # (current, total)
 
@@ -75,6 +76,7 @@ class AnalysisState:
             self._total_nodes = 0
             self._total_edges = 0
             self.running = False
+            self.backend = "binja"
             self.current_phase = None
             self.phase_progress = None
 
@@ -183,6 +185,11 @@ class AnalysisState:
             queued = [e for e in self.binaries.values() if e.status == BinaryStatus.QUEUED]
             errored = [e for e in self.binaries.values() if e.status == BinaryStatus.ERROR]
 
+            # Keep API status resilient against missed/late phase transitions.
+            effective_running = self.running
+            if not analyzing and not queued and self.current_phase is None:
+                effective_running = False
+
             # Compute syscall/rpc/secure_call counts from edge_kind_counts
             total_syscalls = sum(e.edge_kind_counts.get("SYSCALL", 0) for e in completed)
             total_rpc = sum(e.edge_kind_counts.get("RPC_CLIENT_CALL", 0) for e in completed)
@@ -194,7 +201,7 @@ class AnalysisState:
 
             return {
                 "type": "state_snapshot",
-                "running": self.running,
+                "running": effective_running,
                 "elapsed_s": round(elapsed, 2) if elapsed else None,
                 "binaries": [e.to_dict() for e in self.binaries.values()],
                 "aggregates": {

@@ -6,7 +6,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import multiprocessing as mp
 import os
+import queue
 import threading
 from pathlib import Path
 from typing import Any
@@ -26,8 +28,160 @@ _state: AnalysisState | None = None
 _manager: ConnectionManager | None = None
 _config: dict[str, Any] = {}
 _analysis_thread: threading.Thread | None = None
+_ida_process: mp.Process | None = None
+_ida_pump_thread: threading.Thread | None = None
 _cluster_cache: dict | None = None
 _cluster_lock = threading.Lock()
+
+
+class _QueueObserver:
+    """Observer used inside IDA worker process to stream progress events."""
+
+    def __init__(self, event_queue: mp.Queue):
+        self._q = event_queue
+
+    def on_binary_queued(self, name: str, depth: int) -> None:
+        self._q.put({"type": "binary_queued", "name": name, "depth": depth})
+
+    def on_binary_started(self, name: str, depth: int) -> None:
+        self._q.put({"type": "binary_started", "name": name, "depth": depth})
+
+    def on_binary_completed(
+        self,
+        name: str,
+        depth: int,
+        node_count: int,
+        edge_count: int,
+        import_count: int,
+        elapsed_s: float,
+        discovered: list[str],
+        edge_kind_counts: dict[str, int],
+        xmod_edge_count: int = 0,
+    ) -> None:
+        self._q.put(
+            {
+                "type": "binary_completed",
+                "name": name,
+                "depth": depth,
+                "node_count": node_count,
+                "edge_count": edge_count,
+                "import_count": import_count,
+                "elapsed_s": elapsed_s,
+                "discovered": discovered,
+                "edge_kind_counts": edge_kind_counts,
+                "xmod_edge_count": xmod_edge_count,
+            }
+        )
+
+    def on_binary_error(self, name: str, depth: int, error: str) -> None:
+        self._q.put({"type": "binary_error", "name": name, "depth": depth, "error": error})
+
+    def on_analysis_complete(self, elapsed_s: float, total_nodes: int, total_edges: int) -> None:
+        self._q.put(
+            {
+                "type": "analysis_complete",
+                "elapsed_s": elapsed_s,
+                "total_nodes": total_nodes,
+                "total_edges": total_edges,
+            }
+        )
+
+    def on_phase_started(self, phase: str) -> None:
+        self._q.put({"type": "phase_started", "phase": phase})
+
+    def on_phase_progress(self, phase: str, current: int, total: int) -> None:
+        self._q.put({"type": "phase_progress", "phase": phase, "current": current, "total": total})
+
+    def on_phase_complete(self, phase: str) -> None:
+        self._q.put({"type": "phase_complete", "phase": phase})
+
+
+def _ida_worker_main(payload: dict[str, Any], event_queue: mp.Queue) -> None:
+    """Run IDA analysis in a dedicated process main thread."""
+    try:
+        from ..core.config import Config
+        from ..main import analyze_command
+
+        config = Config.discover(payload.get("config_path"))
+        backend = payload.get("backend", "binja")
+        if config and backend and backend != "auto":
+            config._values["DISASSEMBLER_BACKEND"] = backend
+
+        observer = _QueueObserver(event_queue)
+        analyze_command(
+            binaries=payload.get("binaries", []),
+            search_paths=payload.get("search_paths", []),
+            output_dir=payload.get("output_dir", "output"),
+            log_level=payload.get("log_level", "INFO"),
+            load_neo4j=payload.get("load_neo4j", False),
+            no_neo4j=payload.get("no_neo4j", False),
+            workers=payload.get("workers"),
+            single_binary=payload.get("single_binary", False),
+            prewalk=payload.get("prewalk", False),
+            no_kernel=payload.get("no_kernel", False),
+            only_binaries=payload.get("only_binaries"),
+            depth=payload.get("depth"),
+            config=config,
+            cache_dir=payload.get("cache_dir", ".marco_cache"),
+            no_cache=payload.get("no_cache", False),
+            symbol_store=payload.get("symbol_store", ".marco_symbols"),
+            no_pdb=payload.get("no_pdb", False),
+            use_processes=False,
+            observer=observer,
+        )
+    except Exception as exc:
+        event_queue.put({"type": "worker_error", "error": str(exc)})
+    finally:
+        event_queue.put({"type": "worker_exit"})
+
+
+def _relay_ida_events(event_queue: mp.Queue, process: mp.Process, observer: WebSocketObserver) -> None:
+    """Relay child-process events into shared state + websocket broadcasts."""
+    while True:
+        try:
+            event = event_queue.get(timeout=0.5)
+        except queue.Empty:
+            if not process.is_alive():
+                break
+            continue
+
+        et = event.get("type")
+        if et == "binary_queued":
+            observer.on_binary_queued(event["name"], event["depth"])
+        elif et == "binary_started":
+            observer.on_binary_started(event["name"], event["depth"])
+        elif et == "binary_completed":
+            observer.on_binary_completed(
+                event["name"],
+                event["depth"],
+                event["node_count"],
+                event["edge_count"],
+                event["import_count"],
+                event["elapsed_s"],
+                event.get("discovered", []),
+                event.get("edge_kind_counts", {}),
+                event.get("xmod_edge_count", 0),
+            )
+        elif et == "binary_error":
+            observer.on_binary_error(event["name"], event["depth"], event["error"])
+        elif et == "analysis_complete":
+            observer.on_analysis_complete(event["elapsed_s"], event["total_nodes"], event["total_edges"])
+        elif et == "phase_started":
+            observer.on_phase_started(event["phase"])
+        elif et == "phase_progress":
+            observer.on_phase_progress(event["phase"], event["current"], event["total"])
+        elif et == "phase_complete":
+            observer.on_phase_complete(event["phase"])
+        elif et == "worker_error":
+            logger.error("IDA worker failed: %s", event.get("error"))
+        elif et == "worker_exit" and not process.is_alive():
+            break
+
+    # Clear globals once relay loop finishes for this process.
+    global _ida_process, _ida_pump_thread
+    if _ida_process is process:
+        _ida_process = None
+    _ida_pump_thread = None
 
 
 def configure(state: AnalysisState, manager: ConnectionManager, config: dict[str, Any]) -> None:
@@ -54,6 +208,7 @@ class AnalyzeRequest(BaseModel):
     no_pdb: bool = False
     use_processes: bool = False
     only: list[str] | None = None
+    backend: str = "binja"
 
 
 class CypherRequest(BaseModel):
@@ -160,17 +315,29 @@ async def start_analysis(request: AnalyzeRequest) -> dict:
         return {"error": "either seed or only list must be provided"}
 
     _state.reset()
+    _state.backend = request.backend
     with _cluster_lock:
         _cluster_cache = None  # Invalidate cluster cache for new analysis
 
     loop = asyncio.get_event_loop()
     observer = WebSocketObserver(_manager, _state, loop)
 
+    resolved_backend = request.backend or "binja"
+    if resolved_backend == "auto":
+        cfg = _resolve_config()
+        resolved_backend = cfg.backend if cfg else "binja"
+
+    use_processes = bool(request.use_processes and resolved_backend == "binja")
+
     def _run() -> None:
         try:
             from ..main import analyze_command
 
             config = _resolve_config()
+
+            # Override backend from web UI selection
+            if request.backend and request.backend != "auto":
+                config._values["DISASSEMBLER_BACKEND"] = request.backend
 
             binaries = request.only if request.only else (request.seed or [])
 
@@ -192,7 +359,7 @@ async def start_analysis(request: AnalyzeRequest) -> dict:
                 no_cache=request.no_cache,
                 symbol_store=request.symbol_store,
                 no_pdb=request.no_pdb,
-                use_processes=request.use_processes,
+                use_processes=use_processes,
                 observer=observer,
             )
         except Exception:
@@ -201,8 +368,72 @@ async def start_analysis(request: AnalyzeRequest) -> dict:
                 _state.running = False
             observer.on_analysis_complete(0.0, 0, 0)
 
-    _analysis_thread = threading.Thread(target=_run, daemon=True, name="marco-analysis")
-    _analysis_thread.start()
+    # For IDA we run analysis in a separate process so IDA can own the child
+    # process main thread while the web server remains responsive.
+    logger.debug("Scheduling analysis run for backend=%s", resolved_backend)
+
+    if resolved_backend == "ida":
+        global _ida_process, _ida_pump_thread
+        if _ida_process is not None:
+            if _ida_process.is_alive():
+                # If state says not running but process is still alive, treat it
+                # as stale and reclaim it so users can start a fresh run.
+                if _state is not None and not _state.running:
+                    logger.warning("Terminating stale IDA worker process")
+                    _ida_process.terminate()
+                    _ida_process.join(timeout=5)
+                    if _ida_process.is_alive():
+                        logger.warning("Stale IDA worker process did not exit promptly")
+                        return {"error": "analysis worker cleanup in progress; retry in a moment"}
+                    _ida_process = None
+                else:
+                    return {"error": "analysis already running"}
+            else:
+                with contextlib.suppress(Exception):
+                    _ida_process.join(timeout=0.1)
+                _ida_process = None
+
+        payload = {
+            "binaries": request.only if request.only else (request.seed or []),
+            "search_paths": request.search_paths or [],
+            "output_dir": _config.get("output_dir", "output"),
+            "log_level": _config.get("log_level", "INFO"),
+            "load_neo4j": request.load_neo4j,
+            "no_neo4j": request.no_neo4j,
+            "workers": request.workers,
+            "single_binary": request.single_binary,
+            "prewalk": request.prewalk,
+            "no_kernel": request.no_kernel,
+            "only_binaries": request.only,
+            "depth": request.depth,
+            "config_path": _config.get("config_path"),
+            "cache_dir": request.cache_dir,
+            "no_cache": request.no_cache,
+            "symbol_store": request.symbol_store,
+            "no_pdb": request.no_pdb,
+            "backend": resolved_backend,
+        }
+
+        ctx = mp.get_context("spawn")
+        ida_queue: mp.Queue = ctx.Queue()
+        _ida_process = ctx.Process(
+            target=_ida_worker_main,
+            args=(payload, ida_queue),
+            daemon=True,
+            name="marco-ida-process",
+        )
+        _ida_process.start()
+
+        _ida_pump_thread = threading.Thread(
+            target=_relay_ida_events,
+            args=(ida_queue, _ida_process, observer),
+            daemon=True,
+            name="marco-ida-relay",
+        )
+        _ida_pump_thread.start()
+    else:
+        _analysis_thread = threading.Thread(target=_run, daemon=True, name="marco-analysis")
+        _analysis_thread.start()
 
     return {"status": "started"}
 

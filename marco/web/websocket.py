@@ -46,8 +46,11 @@ class ConnectionManager:
 class WebSocketObserver:
     """Bridges synchronous orchestrator callbacks to async WebSocket broadcasts.
 
-    The orchestrator runs in a background thread. This observer uses
+    The orchestrator normally runs in a background thread. This observer uses
     asyncio.run_coroutine_threadsafe() to push events into the FastAPI event loop.
+
+    When the IDA backend is active, analysis runs on the event-loop thread,
+    which can temporarily delay WebSocket sends until the loop is free.
     """
 
     def __init__(self, manager: ConnectionManager, state: AnalysisState, loop: asyncio.AbstractEventLoop):
@@ -56,6 +59,8 @@ class WebSocketObserver:
         self._loop = loop
 
     def _broadcast(self, event: dict[str, Any]) -> None:
+        # Do not try to manually drive the event loop here; re-entrant loop
+        # pumping causes RuntimeError on asyncio/uvicorn internals.
         asyncio.run_coroutine_threadsafe(self._manager.broadcast(event), self._loop)
 
     def on_binary_queued(self, name: str, depth: int) -> None:

@@ -47,13 +47,22 @@
                                 <span class="form-hint">How many import levels to follow</span>
                                 <input type="number" id="depth-input" placeholder="unlimited" min="1" style="width:100px">
                             </div>
+                            <div>
+                                <label for="backend-input">disassembler</label>
+                                <span class="form-hint">Backend engine</span>
+                                <select id="backend-input" class="backend-select">
+                                    <option value="binja" selected>Binary Ninja</option>
+                                    <option value="ida">IDA Pro</option>
+                                    <option value="ghidra">Ghidra</option>
+                                </select>
+                            </div>
                         </div>
 
                         <div class="checkbox-grid">
                             <label>
                                 <input type="checkbox" id="use-processes-input" checked>
                                 <span class="cb-label">multiprocessing</span>
-                                <span class="cb-hint">Run workers in separate processes (recommended)</span>
+                                <span class="cb-hint">Run workers in separate processes (Binary Ninja only)</span>
                             </label>
                             <label>
                                 <input type="checkbox" id="prewalk-input" checked>
@@ -178,7 +187,7 @@
 <script src="js/vendor/force-graph.min.js"></script>
 <script src="js/sparkline.js"></script>
 <script src="js/table.js"></script>
-<script src="js/analysis.js"></script>
+<script src="js/analysis.js?v=20260302"></script>
 <script src="js/graph.js"></script>
 <script src="js/clusters.js"></script>
 <script src="js/exploration.js"></script>
