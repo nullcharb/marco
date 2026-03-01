@@ -4,7 +4,8 @@ Cross-binary control-flow cartography
 ### Features
 - **Inter-binary control flow extraction** across traditional `call` edges, as well as syscall, secure call, and RPC client calls
 - **Web UI** — browser-based analysis interface with dependency graph visualization and interactive Neo4j query editor
-- **Binary Ninja adapter** for binary analysis and extracting function nodes and call edges
+- **Multi-backend disassembler support** via a shared adapter layer: Binary Ninja, IDA Pro, and Ghidra
+- **Backend-aware runtime behavior** (automatic safety fallbacks for process/thread execution based on backend constraints)
 - **Module clustering (experimental)** — community detection to group related binaries, with optional LLM-based cluster labeling
 - Automatic function name demangling (MSVC and GNU3 formats)
 - JSONL export of nodes and edges for external analysis
@@ -12,18 +13,22 @@ Cross-binary control-flow cartography
 
 ### Requirements
 - Python 3.10+
-- Binary Ninja Python API (headless) — see docs: [`https://api.binary.ninja/`](https://api.binary.ninja/)
 - Neo4j 5.21.0+ with APOC plugin
 
-### Quick Start
-1. Install the Binary Ninja Python API:
-```bash
-python ~\AppData\Local\Vector35\BinaryNinja\scripts\install_api.py
-```
+Disassembler backend requirements:
+- **Binary Ninja**: Binary Ninja Python API (headless) — see [`https://api.binary.ninja/`](https://api.binary.ninja/)
+- **IDA Pro**: IDA installation and `ida-domain` Python package
+- **Ghidra**: Ghidra installation and `pyghidra` Python package
 
-2. Install marco:
+### Quick Start
+1. Install marco:
 ```bash
 uv tool install git+https://github.com/originsec/marco
+```
+
+2. If you plan to use Binary Ninja, install the Binary Ninja Python API:
+```bash
+python ~\AppData\Local\Vector35\BinaryNinja\scripts\install_api.py
 ```
 
 3. Setup your environment
@@ -35,6 +40,12 @@ NEO4J_URI=neo4j://127.0.0.1:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=your_password_here
 ANTHROPIC_API_KEY=your_api_key_here (optional, for cluster labeling)
+# Backend selection: auto | binja | ida | ghidra
+DISASSEMBLER_BACKEND=auto
+# Required for IDA backend
+IDADIR=C:\Program Files\IDA Professional 9.2
+# Required for Ghidra backend
+GHIDRA_INSTALL_DIR=C:\Tools\ghidra_12.0.3_PUBLIC
 ```
 
 Or simply set environment variables:
@@ -44,6 +55,12 @@ $env:NEO4J_USER=neo4j
 $env:NEO4J_PASSWORD=your_password_here
 # Optional, for cluster labeling
 $env:ANTHROPIC_API_KEY=your_api_key_here
+# Optional backend selection
+$env:DISASSEMBLER_BACKEND=ida
+# Required when backend=ida
+$env:IDADIR=C:\Program Files\IDA Professional 9.2
+# Required when backend=ghidra
+$env:GHIDRA_INSTALL_DIR=C:\Tools\ghidra_12.0.3_PUBLIC
 ```
 
 4. Run marco
@@ -72,6 +89,9 @@ marco -o ./results
 marco --config marco.config
 ```
 
+Backend selection happens in the **Web UI Analysis form** (disassembler dropdown).
+Config value `DISASSEMBLER_BACKEND` is used as the default; the UI selection overrides it for that run.
+
 ### Web UI
 
 The browser interface has three views:
@@ -80,8 +100,18 @@ The browser interface has three views:
 2. **Exploration** — browse results from completed runs. Toggle between a 3D force-directed dependency graph, a tabular module listing, and a module clustering view.
 3. **Query** — run Cypher queries against Neo4j with preset templates for common patterns. Results render as tables and/or interactive 3D graphs.
 
+### Backend Runtime Model
+- **Binary Ninja (`binja`)**: supports thread mode and process mode.
+- **IDA (`ida`)**: analysis runs in a dedicated spawned process; execution is sequential to satisfy IDA thread-affinity constraints.
+- **Ghidra (`ghidra`)**: analysis runs in thread mode; process mode is automatically disabled because JVM state cannot be safely forked.
+- **Auto (`auto`)**: selects the first importable backend in this order: `binaryninja`, `ida_domain`, `pyghidra`.
+
+Backend-specific output artifacts:
+- **IDA**: `.i64` databases are written under `output/ida_databases/`.
+- **Ghidra**: project files are written under `output/ghidra_projects/`.
+
 ### Performance Tips
-- **Process mode** — use the "processes" toggle in the web UI for true parallelism (higher memory)
+- **Process mode** — use the "processes" toggle for Binary Ninja only (true parallelism, higher memory)
 - **Prewalk** — pre-seed the work queue with PE import tables for better parallel utilization
 - **Depth limit** — restrict dependency traversal depth for faster runs
 - **No kernel** — skip ntoskrnl.exe/securekernel.exe analysis for user-mode only graphs
@@ -101,3 +131,5 @@ Each analysis creates a timestamped directory containing:
 - `dependencies.md` — Mermaid diagram of module dependencies
 - `rpc_registry_final.json` — RPC registry state
 - `rpc_unresolved.json` — unresolved RPC edges for debugging
+- `ida_databases/` — IDA-generated analysis databases (IDA backend)
+- `ghidra_projects/` — Ghidra project workspace files (Ghidra backend)
