@@ -167,6 +167,7 @@ output/*
 specs/*
 *.log
 *.ipynb
+reference_code/
 
 # Ignore all config files, but keep sample.config
 *.config
